@@ -1,0 +1,435 @@
+MONGODB PRACTICAL SOLUTIONS
+==========================
+
+These solutions are written for MongoDB Shell (mongosh).
+Run each scenario in its own database. Run the setup/insertMany section only once
+on a fresh collection; otherwise duplicate-key errors may occur.
+
+------------------------------------------------------------
+SCENARIO B1: CAFE ORDERS - AGGREGATION
+Database: cafeDB
+Collection: orders
+------------------------------------------------------------
+
+1. SETUP: CREATE THE DATABASE COLLECTION AND INSERT SAMPLE DATA
+
+use cafeDB
+
+db.orders.insertMany([
+  {
+    _id: 1,
+    customer: "Meena",
+    item: "Coffee",
+    qty: 2,
+    price: 120,
+    status: "delivered"
+  },
+  {
+    _id: 2,
+    customer: "Ravi",
+    item: "Sandwich",
+    qty: 1,
+    price: 180,
+    status: "delivered"
+  },
+  {
+    _id: 3,
+    customer: "Meena",
+    item: "Sandwich",
+    qty: 2,
+    price: 180,
+    status: "cancelled"
+  },
+  {
+    _id: 4,
+    customer: "Karthik",
+    item: "Coffee",
+    qty: 3,
+    price: 120,
+    status: "delivered"
+  },
+  {
+    _id: 5,
+    customer: "Ravi",
+    item: "Coffee",
+    qty: 1,
+    price: 120,
+    status: "delivered"
+  },
+  {
+    _id: 6,
+    customer: "Meena",
+    item: "Cake",
+    qty: 1,
+    price: 250,
+    status: "delivered"
+  },
+  {
+    _id: 7,
+    customer: "Karthik",
+    item: "Cake",
+    qty: 2,
+    price: 250,
+    status: "pending"
+  }
+])
+
+
+TASK 1: COUNT ORDERS BY STATUS (MOST ORDERS FIRST)
+
+db.orders.aggregate([
+  {
+    $group: {
+      _id: "$status",
+      count: { $sum: 1 }
+    }
+  },
+  {
+    $sort: { count: -1 }
+  }
+])
+
+EXPECTED OUTPUT:
+
+[
+  { _id: "delivered", count: 5 },
+  { _id: "cancelled", count: 1 },
+  { _id: "pending", count: 1 }
+]
+
+
+TASK 2: SHOW ONLY DELIVERED ORDERS WITH CUSTOMER, ITEM AND QUANTITY
+
+db.orders.aggregate([
+  {
+    $match: { status: "delivered" }
+  },
+  {
+    $project: {
+      _id: 0,
+      customer: 1,
+      item: 1,
+      qty: 1
+    }
+  }
+])
+
+EXPECTED OUTPUT (document order may vary):
+
+[
+  { customer: "Meena", item: "Coffee", qty: 2 },
+  { customer: "Ravi", item: "Sandwich", qty: 1 },
+  { customer: "Karthik", item: "Coffee", qty: 3 },
+  { customer: "Ravi", item: "Coffee", qty: 1 },
+  { customer: "Meena", item: "Cake", qty: 1 }
+]
+
+
+TASK 3: TOTAL QUANTITY AND REVENUE FOR EACH DELIVERED ITEM
+Revenue = quantity * price. Sort by highest revenue first.
+
+db.orders.aggregate([
+  {
+    $match: { status: "delivered" }
+  },
+  {
+    $group: {
+      _id: "$item",
+      totalQty: { $sum: "$qty" },
+      revenue: {
+        $sum: { $multiply: ["$qty", "$price"] }
+      }
+    }
+  },
+  {
+    $sort: { revenue: -1 }
+  }
+])
+
+EXPECTED OUTPUT:
+
+[
+  { _id: "Coffee", totalQty: 6, revenue: 720 },
+  { _id: "Cake", totalQty: 1, revenue: 250 },
+  { _id: "Sandwich", totalQty: 1, revenue: 180 }
+]
+
+Calculation:
+Coffee: (2 + 3 + 1) * 120 = 720
+Cake: 1 * 250 = 250
+Sandwich: 1 * 180 = 180
+
+
+TASK 4: NUMBER OF DELIVERED ORDERS AND TOTAL SPEND PER CUSTOMER
+Show the biggest spender first. Rename the grouped _id field to customer.
+
+db.orders.aggregate([
+  {
+    $match: { status: "delivered" }
+  },
+  {
+    $group: {
+      _id: "$customer",
+      orders: { $sum: 1 },
+      totalSpend: {
+        $sum: { $multiply: ["$qty", "$price"] }
+      }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      customer: "$_id",
+      orders: 1,
+      totalSpend: 1
+    }
+  },
+  {
+    $sort: { totalSpend: -1 }
+  }
+])
+
+EXPECTED OUTPUT:
+
+[
+  { customer: "Meena", orders: 2, totalSpend: 490 },
+  { customer: "Karthik", orders: 1, totalSpend: 360 },
+  { customer: "Ravi", orders: 2, totalSpend: 300 }
+]
+
+
+TASK 5: RETURN ONLY THE SINGLE BEST CUSTOMER
+
+Use the same aggregation as Task 4, then sort by total spend and limit
+the result to one customer.
+
+db.orders.aggregate([
+  {
+    $match: { status: "delivered" }
+  },
+  {
+    $group: {
+      _id: "$customer",
+      orders: { $sum: 1 },
+      totalSpend: {
+        $sum: { $multiply: ["$qty", "$price"] }
+      }
+    }
+  },
+  {
+    $sort: { totalSpend: -1 }
+  },
+  {
+    $limit: 1
+  },
+  {
+    $project: {
+      _id: 0,
+      customer: "$_id",
+      totalSpend: 1
+    }
+  }
+])
+
+EXPECTED OUTPUT:
+
+[
+  { customer: "Meena", totalSpend: 490 }
+]
+
+
+------------------------------------------------------------
+SCENARIO B2: LIBRARY BOOKS - UPDATES, UPSERTS AND DELETES
+Database: libraryDB
+Collection: books
+------------------------------------------------------------
+
+1. SETUP: CREATE THE DATABASE COLLECTION AND INSERT SAMPLE DATA
+
+use libraryDB
+
+db.books.insertMany([
+  {
+    _id: 1,
+    title: "Database Systems",
+    author: "Elmasri",
+    copies: 5,
+    status: "available"
+  },
+  {
+    _id: 2,
+    title: "Operating Systems",
+    author: "Galvin",
+    copies: 3,
+    status: "available"
+  },
+  {
+    _id: 3,
+    title: "Computer Networks",
+    author: "Tanenbaum",
+    copies: 0,
+    status: "unavailable"
+  },
+  {
+    _id: 4,
+    title: "Old Almanac 1990",
+    author: "Unknown",
+    copies: 0,
+    status: "unavailable"
+  },
+  {
+    _id: 5,
+    title: "Torn Notes",
+    author: "Unknown",
+    copies: 0,
+    status: "damaged"
+  },
+  {
+    _id: 6,
+    title: "Water-damaged Atlas",
+    author: "Unknown",
+    copies: 1,
+    status: "damaged"
+  }
+])
+
+
+TASK 1: ADD TWO COPIES OF "OPERATING SYSTEMS" USING $INC
+
+db.books.updateOne(
+  { title: "Operating Systems" },
+  { $inc: { copies: 2 } }
+)
+
+EXPECTED RESULT:
+matchedCount: 1
+modifiedCount: 1
+
+Operating Systems copies change from 3 to 5.
+
+
+TASK 2: REDUCE DATABASE SYSTEMS COPIES BY ONE USING $INC
+
+db.books.updateOne(
+  { title: "Database Systems" },
+  { $inc: { copies: -1 } }
+)
+
+EXPECTED RESULT:
+matchedCount: 1
+modifiedCount: 1
+
+Database Systems copies change from 5 to 4.
+
+
+TASK 3: UPSERT "ARTIFICIAL INTELLIGENCE"
+Insert the book if it does not exist. Run the exact same command twice.
+
+db.books.updateOne(
+  { title: "Artificial Intelligence" },
+  {
+    $setOnInsert: {
+      title: "Artificial Intelligence",
+      author: "Russell",
+      copies: 4,
+      status: "available"
+    }
+  },
+  { upsert: true }
+)
+
+EXPECTED RESULT ON FIRST RUN:
+- A new document is inserted.
+- upsertedCount: 1
+- matchedCount: 0
+- modifiedCount: 0
+
+EXPECTED RESULT ON SECOND RUN:
+- The document already exists, so no duplicate is inserted.
+- upsertedCount: 0
+- matchedCount: 1
+- modifiedCount: 0
+
+Note: $setOnInsert applies its values only when an upsert inserts a new
+document. It does not change the existing document on the second run.
+
+
+TASK 4: UPDATE COMPUTER NETWORKS USING $SET AND $INC TOGETHER
+
+db.books.updateOne(
+  { title: "Computer Networks" },
+  {
+    $set: { status: "available" },
+    $inc: { copies: 3 }
+  }
+)
+
+EXPECTED RESULT:
+matchedCount: 1
+modifiedCount: 1
+
+Computer Networks now has copies: 3 and status: "available".
+
+
+TASK 5: DELETE THE BOOK "OLD ALMANAC 1990"
+
+db.books.deleteOne(
+  { title: "Old Almanac 1990" }
+)
+
+EXPECTED RESULT:
+acknowledged: true
+deletedCount: 1
+
+
+TASK 6: DELETE ALL BOOKS WHOSE STATUS IS "DAMAGED" OR "LOST"
+
+db.books.deleteMany(
+  { status: { $in: ["damaged", "lost"] } }
+)
+
+EXPECTED RESULT:
+acknowledged: true
+deletedCount: 2
+
+"Torn Notes" and "Water-damaged Atlas" are deleted. No document has
+status "lost", so only the two damaged documents are removed.
+
+
+TASK 7: DISPLAY REMAINING BOOKS WITH ONLY TITLE AND COPIES, SORTED BY TITLE
+
+db.books.find(
+  {},
+  { _id: 0, title: 1, copies: 1 }
+).sort({ title: 1 })
+
+EXPECTED OUTPUT:
+
+[
+  { title: "Artificial Intelligence", copies: 4 },
+  { title: "Computer Networks", copies: 3 },
+  { title: "Database Systems", copies: 4 },
+  { title: "Operating Systems", copies: 5 }
+]
+
+
+------------------------------------------------------------
+QUICK REVISION: IMPORTANT MONGODB OPERATORS
+------------------------------------------------------------
+
+$match       Filters documents according to a condition.
+$project     Selects, removes or reshapes fields in the output.
+$group       Groups documents and performs calculations.
+$sum         Adds values or counts documents when used with $sum: 1.
+$sort        Sorts results. 1 = ascending, -1 = descending.
+$multiply    Multiplies values, used here to calculate revenue/spending.
+$limit       Restricts the number of returned documents.
+$inc         Increases or decreases a numeric field.
+$set         Sets or changes a field's value.
+$setOnInsert Sets fields only when an upsert inserts a new document.
+upsert       Inserts a document if the filter does not match an existing one.
+deleteOne    Deletes one matching document.
+deleteMany   Deletes all matching documents.
+$in          Matches a value contained in a specified array.
+
+END OF SOLUTIONS
